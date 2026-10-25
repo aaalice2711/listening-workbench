@@ -1,0 +1,340 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>听力答案检索工作台</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      background: #f4f6fa;
+      color: #222;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    h1 { font-size: 26px; }
+    .subtitle { color: #666; font-size: 14px; }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 20px 0;
+    }
+
+    input, select, button {
+      padding: 12px;
+      font-size: 15px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+
+    input {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    button {
+      cursor: pointer;
+      background: white;
+    }
+
+    button:hover { background: #edf2ff; }
+
+    .primary {
+      background: #315efb;
+      color: white;
+      border: none;
+    }
+
+    .card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 18px;
+      margin: 14px 0;
+    }
+
+    .result-card { cursor: pointer; }
+    .result-card:hover { border-color: #315efb; }
+
+    .meta {
+      color: #666;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .correct {
+      background: #edf8f0;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 12px 0;
+      line-height: 1.6;
+    }
+
+    .correct-label {
+      color: #19703a;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+
+    .option {
+      line-height: 1.6;
+      padding: 7px 0;
+    }
+
+    .correct-option {
+      color: #19703a;
+      font-weight: bold;
+    }
+
+    .hidden { display: none; }
+
+    #status {
+      color: #666;
+      font-size: 14px;
+      margin: 12px 0;
+    }
+
+    #message {
+      color: #b42318;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      h1 { font-size: 22px; }
+      .card { padding: 14px; }
+    }
+  </style>
+</head>
+
+<body>
+<div class="container">
+  <h1>听力答案检索工作台</h1>
+  <div class="subtitle">输入选项中的任意单词，即可检索对应题目。</div>
+
+  <div class="toolbar">
+    <input id="searchInput" type="text"
+      placeholder="输入英文单词或短语，例如 training">
+    <select id="yearFilter">
+      <option value="all">全部年份</option>
+    </select>
+    <button id="searchButton" class="primary">搜索</button>
+  </div>
+
+  <div id="status">正在加载题库……</div>
+  <div id="message"></div>
+  <div id="results"></div>
+
+  <section id="yearPage" class="hidden">
+    <button id="backButton">← 返回搜索结果</button>
+    <h2 id="yearTitle"></h2>
+    <div id="yearQuestions"></div>
+  </section>
+</div>
+
+<script>
+  let allQuestions = [];
+  let lastResults = [];
+
+  const searchInput = document.getElementById("searchInput");
+  const yearFilter = document.getElementById("yearFilter");
+  const results = document.getElementById("results");
+  const status = document.getElementById("status");
+  const message = document.getElementById("message");
+  const yearPage = document.getElementById("yearPage");
+
+  function isValidQuestion(item) {
+    if (!item || typeof item !== "object") return false;
+    if (!Number.isInteger(Number(item.year))) return false;
+    if (!Number.isInteger(Number(item.question))) return false;
+    if (!item.test || !item.options) return false;
+    if (!["A", "B", "C", "D"].includes(item.correctOption)) return false;
+
+    return ["A", "B", "C", "D"].every(letter =>
+      typeof item.options[letter] === "string" &&
+      item.options[letter].trim().length > 0
+    );
+  }
+
+  function getCorrectSentence(item) {
+    return item.options[item.correctOption];
+  }
+
+  function createQuestionCard(item, clickable = false) {
+    const card = document.createElement("div");
+    card.className = "card" + (clickable ? " result-card" : "");
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent =
+      `${item.year}年 · ${item.test} · 第${item.question}题`;
+    card.appendChild(meta);
+
+    const correct = document.createElement("div");
+    correct.className = "correct";
+
+    const label = document.createElement("div");
+    label.className = "correct-label";
+    label.textContent = `正确答案：${item.correctOption}`;
+
+    const sentence = document.createElement("div");
+    sentence.textContent = getCorrectSentence(item);
+
+    correct.append(label, sentence);
+    card.appendChild(correct);
+
+    ["A", "B", "C", "D"].forEach(letter => {
+      const option = document.createElement("div");
+      option.className = "option" +
+        (letter === item.correctOption ? " correct-option" : "");
+      option.textContent =
+        `${letter}. ${item.options[letter]}`;
+      card.appendChild(option);
+    });
+
+    if (clickable) {
+      const hint = document.createElement("div");
+      hint.className = "meta";
+      hint.textContent = "点击查看这一年的全部题目 →";
+      card.appendChild(hint);
+
+      card.addEventListener("click", () => showYear(item.year));
+    }
+
+    return card;
+  }
+
+  function searchQuestions() {
+    const keyword = searchInput.value.trim().toLowerCase();
+    const selectedYear = yearFilter.value;
+
+    lastResults = allQuestions.filter(item => {
+      const matchesYear =
+        selectedYear === "all" ||
+        String(item.year) === selectedYear;
+
+      const matchesKeyword =
+        keyword === "" ||
+        ["A", "B", "C", "D"].some(letter =>
+          item.options[letter].toLowerCase().includes(keyword)
+        );
+
+      return matchesYear && matchesKeyword;
+    });
+
+    results.replaceChildren();
+    yearPage.classList.add("hidden");
+    results.classList.remove("hidden");
+
+    if (lastResults.length === 0) {
+      status.textContent = "没有找到符合条件的题目。";
+      return;
+    }
+
+    status.textContent = `找到 ${lastResults.length} 道题目。点击题目卡片可查看该年份的全部题目。`;
+
+    lastResults.forEach(item => {
+      results.appendChild(createQuestionCard(item, true));
+    });
+  }
+
+  function showYear(year) {
+    results.classList.add("hidden");
+    yearPage.classList.remove("hidden");
+
+    const questions = allQuestions
+      .filter(item => Number(item.year) === Number(year))
+      .sort((a, b) =>
+        String(a.test).localeCompare(String(b.test), "zh-CN") ||
+        Number(a.question) - Number(b.question)
+      );
+
+    document.getElementById("yearTitle").textContent =
+      `${year}年 · 全部听力题目（${questions.length}题）`;
+
+    const container = document.getElementById("yearQuestions");
+    container.replaceChildren();
+
+    questions.forEach(item => {
+      container.appendChild(createQuestionCard(item));
+    });
+
+    status.textContent = `正在查看 ${year} 年的全部题目。`;
+  }
+
+  document.getElementById("searchButton")
+    .addEventListener("click", searchQuestions);
+
+  searchInput.addEventListener("keydown", event => {
+    if (event.key === "Enter") searchQuestions();
+  });
+
+  yearFilter.addEventListener("change", searchQuestions);
+
+  document.getElementById("backButton").addEventListener("click", () => {
+    yearPage.classList.add("hidden");
+    results.classList.remove("hidden");
+    searchQuestions();
+  });
+
+  async function loadQuestions() {
+    try {
+      const response = await fetch("./answers.json");
+
+      if (!response.ok) {
+        throw new Error(`无法读取 answers.json，HTTP 状态码：${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (!Array.isArray(data)) {
+        throw new Error("answers.json 的最外层必须是数组 []。");
+      }
+
+      const invalid = data.filter(item => !isValidQuestion(item));
+
+      if (invalid.length > 0) {
+        throw new Error(
+          `题库中有 ${invalid.length} 条数据格式不正确。请检查每道题是否包含 year、test、question、options（A/B/C/D）和 correctOption。`
+        );
+      }
+
+      allQuestions = data;
+
+      const years = [...new Set(
+        allQuestions.map(item => Number(item.year))
+      )].sort((a, b) => b - a);
+
+      years.forEach(year => {
+        const option = document.createElement("option");
+        option.value = String(year);
+        option.textContent = `${year}年`;
+        yearFilter.appendChild(option);
+      });
+
+      status.textContent = `题库加载成功，共 ${allQuestions.length} 道题。`;
+      searchQuestions();
+    } catch (error) {
+      status.textContent = "题库加载失败。";
+      message.textContent =
+        error.message +
+        "\n\n请确认 answers.json 和 index.html 在同一个文件夹中，并且本地服务器仍在运行。";
+    }
+  }
+
+  loadQuestions();
+</script>
+</body>
+</html>
